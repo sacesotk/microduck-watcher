@@ -1,0 +1,19 @@
+# 仮想環境・キャッシュ
+.venv/
+__pycache__/
+*.pyc
+
+# 実行時の出力（画像は保存しない設計。CSV/ログ/診断画像もコミットしない）
+logs/*
+!logs/.gitkeep
+
+# 外部リポジトリ・大きな配布物（scripts/setup_*.ps1 で取得する）
+microduck_rl/
+tools/voicevox/
+assets/models/*.pt
+assets/models/*.task
+policies/*.onnx
+yolo11n.pt
+
+# 仕様書 PDF などの内部資料
+docs/*.pdf

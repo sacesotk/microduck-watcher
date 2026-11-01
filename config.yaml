@@ -1,0 +1,94 @@
+# Microduck 見守り・声かけシミュレーション 設定
+# 閾値・時間・発話文はすべてここで変更する（仕様書 2章/5章/6章）
+
+camera:
+  index: 0            # 内蔵 "USB2.0 HD UVC WebCam" は通常 0。IR カメラが先に来る場合は 1 に変更
+  width: 640
+  height: 480
+  mirror_display: true   # 画面表示だけ鏡像にする（判定座標は非鏡像のまま）
+
+perception:
+  yolo_model: assets/models/yolo11n.pt
+  imgsz: 480             # CPU で 10 fps 以上を狙う。重ければ 416/384 に下げる
+  device: cpu            # このPCは RTX 3060 だが CPU 版 torch のため cpu 固定
+  person_conf: 0.5
+  phone_conf: 0.4
+  detect_every_n: 1      # 2 にすると YOLO を 1 フレームおきに実行（結果は保持）
+  far_face_h: 0.12       # 実カメラ: 顔枠の高さ/画面高さ がこれ未満なら「遠い」→ 近づいてから話す
+  near_face_h: 0.18      # 実カメラ: これ以上なら「十分近い」→ 止まる（sim 版の校正は watcher/sim_perception.py）
+
+fatigue:
+  face_model: assets/models/face_landmarker.task
+  window_s: 60
+  eye_closed_thresh: 0.6      # eyeBlinkLeft/Right 平均がこれ超で閉眼
+  yawn_jaw_thresh: 0.6        # jawOpen がこれ超
+  yawn_min_s: 1.5             # これ以上続いたらあくび 1 回
+  droop_pitch_deg: 20         # 下向きピッチ角がこれ超で「頭が下がっている」
+  droop_pitch_sign: 1         # 自分の顔で確認し、符号が逆なら -1
+  weights: { perclos: 0.5, yawn: 0.3, droop: 0.2 }
+  yawn_norm: 2                # min(1, yawn / yawn_norm)
+  exclude_droop_when_phone: true
+
+events:
+  presence_min_s: 1.0         # F1: 1.0 秒連続検出で在席
+  absence_reset_s: 10.0       # F1: 10 秒以上不在で再発火可
+  phone_hold_s: 5.0           # F2: 顔より下のスマホが 5 秒連続
+  phone_cooldown_s: 60
+  fatigue_thresh: 0.35        # F3
+  fatigue_hold_s: 10          # デモ 10 秒 / 本番 30 秒
+  fatigue_cooldown_s: 120
+
+robot:
+  udp_host: 127.0.0.1
+  udp_port: 5005
+  # 学習済みポリシーには静止デッドバンドがあり、前進は 0.25 m/s 以上、後退は 0.4 m/s 以上でないと歩かない
+  # （2026-11-01 計測, sim/diag_minimal.py）。仕様書の「0.2 m/s 以下」は使えないため以下を既定にする。
+  forward_speed: 0.3          # m/s（0.25 未満だと足を動かさない）
+  backward_speed: 0.4         # m/s（0.4 未満だと後退しない）
+  approach_s: 2.0             # 距離が分からないときの前進時間（0.3 m/s × 2 s）
+  approach_max_s: 4.0         # 「遠い」と分かっているときに近づく最大時間（近くなった時点で止まる）
+  lost_tolerance_s: 1.5       # この秒数までの未検出は無視する（在席・スマホ・疲労の判定を切らさない）
+  retreat_s: 1.5              # 0.4 m/s × 1.5 s ≈ 0.3 m 戻る
+  head_yaw_max: 0.8           # rad。ユーザーの画面横位置 ±1 → ±head_yaw_max
+  head_yaw_sign: -1           # 画面右のユーザー → 首を右(負)へ。逆なら 1
+  sit_glide_s: 2.5            # sitstand の座る/立つに要する時間
+  idle_sit: true              # 待機中は座る
+  idle_sit_after_s: 6.0       # 反応終了後、この秒数で座る
+  scan_interval_s: 15.0       # 人がいない間、この間隔で首を左右に振って探す（0 で無効）
+  scan_yaw: 0.9               # 探索時の首の振り幅 [rad]
+  roam_after_s: 60.0          # この秒数以上人が見当たらなければ歩いて探し回る（0 で無効）
+  roam_max_s: 36.0            # 探し回る最大時間。見つからなければ停止して座り、再び roam_after_s 後に探す
+  roam_turn_wz: 1.2           # 探索時の旋回速度 [rad/s]（1.0 未満では回らない）
+  roam_turn_s: 1.5            # 1 回の旋回時間
+  roam_walk_s: 1.5            # 1 回の前進時間（forward_speed で歩く）
+
+speech:
+  voicevox_url: http://127.0.0.1:50021
+  speaker_id: 13              # 13 = 青山龍星(ノーマル, 低めの男性声)。3 = ずんだもん, 11 = 玄野武宏
+  credit: "VOICEVOX:青山龍星"
+  prewarm: true               # 起動時に全発話文を合成してキャッシュ（1 秒以内の再生保証）
+  quack_wav: assets/quack.wav
+  phrases:
+    greet:
+      - "こんにちは！"
+      - "やあ、こんにちは。今日もよろしくね。"
+      - "おかえりなさい！"
+    phone:
+      - "スマホ、ちょっと休憩しませんか？"
+      - "スマホばかり見てると、目が疲れちゃいますよ。"
+      - "そろそろ画面から目を離してみませんか？"
+    fatigue:
+      - "お疲れのようですね。少し休みませんか？"
+      - "眠そうですね。少し伸びをしてみませんか？"
+      - "休憩のタイミングかもしれませんよ。"
+
+logging:
+  dir: logs
+  interval_s: 1.0             # CSV に書く間隔（画像は保存しない）
+
+display:
+  show_window: true
+  window_name: "Microduck Watcher"
+  subtitle_s: 4.0
+  font_path: "C:/Windows/Fonts/meiryo.ttc"   # 日本語字幕用
+  font_size: 28

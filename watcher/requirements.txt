@@ -1,0 +1,10 @@
+# watcher 側（Windows ネイティブ, Python 3.12）
+opencv-python>=4.10
+ultralytics>=8.3
+mediapipe>=0.10.21,<1      # 1.x は API が変わるため 0.10 系に固定
+pyyaml
+requests
+pyttsx3                    # VOICEVOX が使えない時の予備
+sounddevice                # wav 再生（simpleaudio は Windows/py3.12 用 wheel が無いため不採用）
+soundfile
+numpy

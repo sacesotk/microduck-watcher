@@ -1,0 +1,8 @@
+# sim 側（Windows ネイティブ最小環境, Python 3.12）: 公式 microduck_rl/uv.lock と同じ版に合わせる
+mujoco==3.10.0
+onnxruntime>=1.24.4
+numpy>=2.4,<3
+colorama
+# infer_policy.py が既定で使う BAM アクチュエータモデル（純 Python）。
+# 公式 uv.lock が固定しているコミットに合わせる（ブランチ先頭は infer_policy.py と引数が合わない）
+better-actuator-models @ git+https://github.com/Rhoban/bam.git@62bd8ce12154340be97e06f7f41a0ca8f116d967
