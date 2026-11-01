@@ -20,29 +20,56 @@ SCENE_XML = os.path.join(ROOT, "microduck_rl", "src", "mjlab_microduck", "robot"
 
 
 class StateReceiver(threading.Thread):
-    def __init__(self, host="127.0.0.1", port=5006):
+    """sim_runner が配信する姿勢 (qpos) を受け取る。
+    ループバック以外の送信元・サイズ超過・不正な JSON・NaN/Infinity・長さ違い・非有限値は捨て、
+    検証を通った最新の qpos だけを latest に保持する（sim/udp_schema.py）。"""
+
+    def __init__(self, expected_len: int, host="127.0.0.1", port=5006):
         super().__init__(daemon=True)
+        from udp_schema import MAX_DATAGRAM, Rejected, loads_strict, validate_state
+        self._loads, self._validate, self._Rejected, self._max = loads_strict, validate_state, Rejected, MAX_DATAGRAM
+        self.expected_len = int(expected_len)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((host, port))
         self.sock.settimeout(0.5)
-        self.latest = None
+        self.latest = None           # {"qpos": [...]} 検証済みのみ
         self.last_t = 0.0
+        self.n_rejected = 0
+        self._closed = False
         self.start()
 
+    def close(self):
+        self._closed = True
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
     def run(self):
-        while True:
+        while not self._closed:
             try:
-                data, _ = self.sock.recvfrom(65535)
+                data, sender = self.sock.recvfrom(self._max + 1)
             except socket.timeout:
                 continue
             except OSError:
-                break
+                # Windows では上限超のデータグラムが OSError(WSAEMSGSIZE) になる。
+                # ソケットが閉じられた場合以外は「拒否」として受信を続ける。
+                if self._closed:
+                    break
+                self.n_rejected += 1
+                continue
             try:
-                self.latest = json.loads(data.decode("utf-8"))
-                self.last_t = time.time()
+                msg = self._loads(data, sender)
+                qpos = self._validate(msg, self.expected_len)
+            except self._Rejected:
+                self.n_rejected += 1
+                continue
             except Exception:
-                pass
+                self.n_rejected += 1
+                continue
+            self.latest = {"qpos": qpos}
+            self.last_t = time.time()
 
     @property
     def alive(self):
@@ -98,10 +125,12 @@ class DuckPOV:
         self.demo_scene.set_eyes_closed(self.model, eyes_closed)
 
     def render(self, qpos) -> np.ndarray:
-        """qpos（sim から受信）を反映して head_camera から描画。BGR 画像を返す。"""
+        """qpos（sim から受信、検証済み）を反映して描画。BGR 画像を返す。
+        長さ違い・非有限値は ValueError（呼び出し側は前回の画像を使う）。"""
         q = np.asarray(qpos, dtype=np.float64)
-        n = min(len(q), self.model.nq)
-        self.data.qpos[:n] = q[:n]
+        if q.ndim != 1 or q.shape[0] != self.model.nq or not np.all(np.isfinite(q)):
+            raise ValueError(f"invalid qpos: shape={q.shape}, finite={bool(np.all(np.isfinite(q))) if q.size else False}")
+        self.data.qpos[:] = q
         self.mujoco.mj_forward(self.model, self.data)
         R = self.data.site_xmat[self.site_cam].reshape(3, 3)
         f = R @ self.fwd_local

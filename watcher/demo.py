@@ -157,7 +157,7 @@ def main():
     bridge = SimBridge(cfg["robot"]["udp_host"], int(cfg["robot"]["udp_port"]))
     speech = None if args.no_audio else Speech(cfg)
     pov = DuckPOV()
-    rx = StateReceiver()
+    rx = StateReceiver(expected_len=pov.model.nq)
     perception = SimPerception()
     scorer = FatigueScorer(cfg)
 
@@ -194,6 +194,7 @@ def main():
         cv2.namedWindow(win)
     stand_key = pov.mujoco.mj_name2id(pov.model, pov.mujoco.mjtObj.mjOBJ_KEY, "STAND")
     last_qpos = pov.model.key_qpos[stand_key].tolist()
+    pov_img = None
     print("[demo] start. keys: p s f a r q")
     try:
         while True:
@@ -241,8 +242,13 @@ def main():
 
             # --- ダック視点を描画 → 知覚 → 疲労スコア ---
             if rx.latest is not None:
-                last_qpos = rx.latest.get("qpos", last_qpos)
-            pov_img = pov.render(last_qpos)
+                last_qpos = rx.latest["qpos"]
+            try:
+                pov_img = pov.render(last_qpos)
+            except ValueError as e:          # 検証をすり抜けた不正値は描画を飛ばす（前回の画像を保持）
+                print(f"[demo] pov render skipped: {e}")
+                if pov_img is None:
+                    pov_img = np.zeros((480, 640, 3), np.uint8)
             det, face = perception.analyze(pov_img)
             face_mid = (face.bbox[1] + face.bbox[3]) / 2 if (face.found and face.bbox) else None
             phone_now = phone_below_face(det, face_mid)

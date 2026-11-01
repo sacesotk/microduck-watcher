@@ -61,6 +61,7 @@ os.chdir(RL_DIR)  # MICRODUCK_XML は microduck_rl 直下からの相対パス
 import mujoco  # noqa: E402
 import mujoco.viewer  # noqa: E402
 import demo_scene  # noqa: E402  (椅子に座る人を実行時にシーンへ追加)
+import udp_schema  # noqa: E402  (受信メッセージの厳密な検証)
 import infer_policy  # noqa: E402  (公式スクリプトをモジュールとして読み込む)
 
 ADD_PERSON = True   # --no-person で無効化
@@ -175,18 +176,22 @@ class UdpCommandInput:
 
     # -- 内部 ----------------------------------------------------------------
     def _recv_latest(self):
+        """保留中のデータグラムをすべて読み、検証を通った最後の 1 件（正規化済み）を返す。
+        送信元がループバックでない / サイズ超過 / 不正 JSON / NaN / 型違い / 未知 policy は捨てる。"""
         latest = None
         while True:
             try:
-                data, _ = self.sock.recvfrom(4096)
+                data, sender = self.sock.recvfrom(udp_schema.MAX_DATAGRAM + 1)
             except (BlockingIOError, InterruptedError):
                 break
             except OSError:
                 break
             try:
-                latest = json.loads(data.decode("utf-8"))
-            except Exception as e:  # 壊れた JSON は捨てる
-                print(f"[sim_runner] bad JSON: {e}")
+                latest = udp_schema.validate_command(udp_schema.loads_strict(data, sender))
+            except udp_schema.Rejected as e:
+                print(f"[sim_runner] rejected datagram from {sender}: {e}", flush=True)
+            except Exception as e:
+                print(f"[sim_runner] rejected datagram: {e!r}", flush=True)
         return latest
 
     @staticmethod
@@ -194,36 +199,36 @@ class UdpCommandInput:
         return max(-lim, min(lim, float(v)))
 
     def _apply(self, msg: dict, now: float):
+        """msg は udp_schema.validate_command で正規化済み（policy/twist/head_yaw/duration/sit/scene）。"""
         p = self.policy
         if p is None:
             return
-        kind = str(msg.get("policy", "stop")).lower()
+        kind = msg["policy"]
         if kind == "reset":
             self.reset()
             return
-        if kind == "scene":  # 舞台装置の見た目: {"policy":"scene","person":true,"phone":false,"eyes_closed":false}
-            if "person" in msg:
-                demo_scene.set_person_visible(p.model, bool(msg["person"]))
-            if "phone" in msg:
-                demo_scene.set_phone_visible(p.model, bool(msg["phone"]))
-            if "eyes_closed" in msg:
-                demo_scene.set_eyes_closed(p.model, bool(msg["eyes_closed"]))
-            if "mouth_open" in msg:
-                demo_scene.set_mouth_open(p.model, bool(msg["mouth_open"]))
-            if "side" in msg:
-                demo_scene.set_person_side(p.model, str(msg["side"]))
+        if kind == "scene":  # 舞台装置の見た目
+            sc = msg["scene"]
+            if "person" in sc:
+                demo_scene.set_person_visible(p.model, sc["person"])
+            if "phone" in sc:
+                demo_scene.set_phone_visible(p.model, sc["phone"])
+            if "eyes_closed" in sc:
+                demo_scene.set_eyes_closed(p.model, sc["eyes_closed"])
+            if "mouth_open" in sc:
+                demo_scene.set_mouth_open(p.model, sc["mouth_open"])
+            if "side" in sc:
+                demo_scene.set_person_side(p.model, sc["side"])
             return
-        head_yaw = msg.get("head_yaw")
-        if head_yaw is not None:
-            p.head_offset[2] = self._clip(head_yaw, HEAD_YAW_MAX)
+        if msg["head_yaw"] is not None:
+            p.head_offset[2] = self._clip(msg["head_yaw"], HEAD_YAW_MAX)
             p._update_command()
 
         if kind == "sitstand":
-            want_sit = bool(msg.get("sit", True))
             if p.sit_session is None:
                 print("[sim_runner] sitstand policy not loaded")
                 return
-            if want_sit != p.sit_mode:
+            if msg["sit"] != p.sit_mode:
                 p.vel_cmd[:] = 0.0
                 p.toggle_sit()
             self.deadline = None
@@ -232,16 +237,11 @@ class UdpCommandInput:
         # walking / standing / stop → まず座っていれば立たせる
         if p.sit_mode:
             p.toggle_sit()
-        if kind in ("walking", "standing", "stop"):
-            tw = msg.get("twist", [0.0, 0.0, 0.0]) if kind == "walking" else [0.0, 0.0, 0.0]
-            vx = self._clip(tw[0] if len(tw) > 0 else 0.0, VX_MAX)
-            vy = self._clip(tw[1] if len(tw) > 1 else 0.0, VY_MAX)
-            wz = self._clip(tw[2] if len(tw) > 2 else 0.0, WZ_MAX)
-            p.set_vel_cmd(vx, vy, wz)
-            moving = (abs(vx) + abs(vy) + abs(wz)) > 1e-6
-            self.deadline = now + float(msg.get("duration", DEFAULT_DURATION)) if moving else None
-        else:
-            print(f"[sim_runner] unknown policy {kind!r}")
+        vx, vy, wz = (msg["twist"] if kind == "walking" else [0.0, 0.0, 0.0])
+        vx, vy, wz = self._clip(vx, VX_MAX), self._clip(vy, VY_MAX), self._clip(wz, WZ_MAX)
+        p.set_vel_cmd(vx, vy, wz)
+        moving = (abs(vx) + abs(vy) + abs(wz)) > 1e-6
+        self.deadline = now + msg["duration"] if moving else None
 
     # -- TerminalInput 互換 API ------------------------------------------------
     def get_keys(self):
