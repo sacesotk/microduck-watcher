@@ -131,7 +131,11 @@ sim 側は `sim/demo_scene.py` で **椅子に座る人**（見た目だけ、�
 {"policy": "stop"}
 ```
 
-`policy` は walking / standing / sitstand / stop。前進は 0.2 m/s でクリップ。`duration` 経過で速度 0。
+`policy` は walking / standing / sitstand / stop / reset / scene。`duration` 経過で速度 0。
+受信側（sim の指令 :5005、demo の姿勢 :5006）は `sim/udp_schema.py` で厳密に検証する:
+ループバック以外の送信元・8 KiB 超・UTF-8/JSON として不正・`NaN`/`Infinity`・辞書でないトップレベル・未知の policy・
+型違い（文字列や bool の数値）・twist の長さ違い・qpos の長さ違いや非有限値はすべて捨て、数値は範囲内にクリップする。
+テスト: `watcher\tests\test_udp_schema.py`。
 `sitstand` は `sit` フラグで座る/立つ（同じポリシーが約 2 秒で遷移）。walking/standing/stop を送ると座っていれば先に立つ。
 
 ## 歩行ポリシーの制約（2026-11-01 計測）
