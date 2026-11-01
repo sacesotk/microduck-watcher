@@ -73,5 +73,22 @@ check("nan 要素は拒否", rejected(validate_state, {"qpos": [float("nan")] + 
 check("巨大な値は拒否", rejected(validate_state, {"qpos": [1e6] + q[1:]}, 21))
 check("入れ子の配列は拒否", rejected(validate_state, {"qpos": [[0.0]] + q[1:]}, 21))
 
+print("token")
+import tempfile
+from udp_schema import check_token, new_token, read_token, write_token
+tmp = tempfile.mkdtemp()
+tok = new_token()
+check("トークンは 64 桁の hex", len(tok) == 64 and all(c in "0123456789abcdef" for c in tok))
+write_token(tmp, tok)
+check("書いたトークンを読める", read_token(tmp) == tok)
+check("トークン無効 (None) なら検証しない", check_token({"policy": "stop"}, None) is None)
+check("一致するトークンを受理", check_token({"policy": "stop", "token": tok}, tok) is None)
+check("トークン欠落は拒否", rejected(check_token, {"policy": "stop"}, tok))
+check("トークン不一致は拒否", rejected(check_token, {"policy": "stop", "token": "0" * 64}, tok))
+check("型違い（数値）は拒否", rejected(check_token, {"policy": "stop", "token": 12345}, tok))
+with open(os.path.join(tmp, "logs", ".udp_token"), "w") as f:
+    f.write("not-a-token")
+check("壊れたトークンファイルは None", read_token(tmp) is None)
+
 print("\nRESULT:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)

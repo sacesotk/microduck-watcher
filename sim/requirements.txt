@@ -1,8 +1,8 @@
-# sim 側（Windows ネイティブ最小環境, Python 3.12）: 公式 microduck_rl/uv.lock と同じ版に合わせる
+# sim 側の直接依存（人が読む版）。実際のインストールはハッシュ固定の sim/requirements.lock を
+# --require-hashes で行う（scripts/setup_sim.ps1）。更新手順:
+#   uv pip compile --python-version 3.12 --python-platform windows --generate-hashes sim/requirements.txt -o sim/requirements.lock
+# bam（Rhoban/bam）は VCS 依存でハッシュ固定できないため、pins.json のコミット SHA で別途インストールする。
 mujoco==3.10.0
 onnxruntime>=1.24.4
 numpy>=2.4,<3
 colorama
-# infer_policy.py が既定で使う BAM アクチュエータモデル（純 Python）。
-# 公式 uv.lock が固定しているコミットに合わせる（ブランチ先頭は infer_policy.py と引数が合わない）
-better-actuator-models @ git+https://github.com/Rhoban/bam.git@62bd8ce12154340be97e06f7f41a0ca8f116d967

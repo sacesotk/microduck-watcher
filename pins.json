@@ -1,0 +1,45 @@
+{
+  "_comment": "外部から取得するものの固定リビジョンとダイジェスト。scripts/setup_*.ps1 が取得時に照合し、sim_runner.py / watcher/main.py が起動時に再照合する。更新するときは検証してからここを書き換える。",
+  "microduck_rl": {
+    "url": "https://github.com/pollen-robotics/microduck_rl",
+    "commit": "bae39f5900b318f7e87fc485c30a31213cfa14eb",
+    "note": "develop 2026-10-27 'Merge branch share_training into develop'。infer_policy.py の観測/指令契約をこの版で確認"
+  },
+  "bam": {
+    "url": "https://github.com/Rhoban/bam.git",
+    "commit": "62bd8ce12154340be97e06f7f41a0ca8f116d967",
+    "note": "microduck_rl の uv.lock が固定しているコミット（MujocoController に vin_drop_gain がある版）"
+  },
+  "policies": {
+    "repo": "pollen-robotics/microduck-policies",
+    "revision": "665ae4eb20bfe13bca1ef4ea6d4bb6b4a096e448",
+    "files": {
+      "alpha_walking.onnx":  "e36332d383997d51401897734cd3e79cf5038406feddb18b4d57ecfb141daa6c",
+      "alpha_stand.onnx":    "1569268713e40deea795dd2922dba50d3621e15a872855408b6b1b125b1c094b",
+      "alpha_sitstand.onnx": "a6f102d9fd655782ba85bfffe18175c34621da719cffcdd673be7982a06fc254",
+      "velstand.onnx":       "2fc7f8ee6acd7d0d3f66a99927b5d5a56589aeed02ec714de329b252d5ccf492",
+      "manifest.json":       "c566390738dd90a54c1e2de829aaab0e904c636949e2c2c6158ee7bbb889b818"
+    }
+  },
+  "models": {
+    "face_landmarker.task": {
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "sha256": "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+    },
+    "yolo11n.pt": {
+      "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt",
+      "sha256": "0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1"
+    }
+  },
+  "voicevox": {
+    "version": "0.26.0",
+    "asset": "voicevox_engine-windows-cpu-0.26.0.vvpp",
+    "url": "https://github.com/VOICEVOX/voicevox_engine/releases/download/0.26.0/voicevox_engine-windows-cpu-0.26.0.vvpp",
+    "sha256": "80efdaace0b6b0016727ba5e33833ffa1e0d055500b24d779a53ccde1469a8da"
+  },
+  "python": {
+    "sim_lock": "sim/requirements.lock",
+    "watcher_lock": "watcher/requirements.lock",
+    "note": "uv pip compile --generate-hashes で生成。インストールは --require-hashes。bam だけは VCS 依存のためハッシュ不可 → コミット SHA 固定で別途インストール"
+  }
+}

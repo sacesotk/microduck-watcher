@@ -10,16 +10,27 @@
   python sim/send_cmd.py demo              # 立つ→前進→停止→座る→立つ→後退 を順に流す
 """
 import json
+import os
 import socket
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import udp_schema  # noqa: E402
+
 HOST, PORT = "127.0.0.1", 5005
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def send(d: dict):
+    tok = udp_schema.read_token(ROOT)
+    if tok is None:
+        print("session token not found (logs/.udp_token). Start the sim first (scripts/run_sim.bat).")
+    out = dict(d)
+    if tok:
+        out["token"] = tok
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.sendto(json.dumps(d).encode(), (HOST, PORT))
+    s.sendto(json.dumps(out).encode(), (HOST, PORT))
     print("sent", d)
 
 

@@ -15,7 +15,11 @@ import math
 from typing import Any, Optional
 
 MAX_DATAGRAM = 8192
+MAX_PER_TICK = 32            # 1 ティックに読むデータグラム数の上限（それ以上は次ティック以降に回す）
+RCVBUF_BYTES = 64 * 1024     # ソケット受信バッファ（滞留できる量の上限）
 ALLOWED_SENDERS = ("127.0.0.1",)
+TOKEN_FILE = "logs/.udp_token"   # sim_runner が起動時に生成する共有トークン（同一ユーザーのローカルプロセスだけが読める前提）
+TOKEN_BYTES = 32
 POLICIES = ("walking", "standing", "sitstand", "stop", "reset", "scene")
 VX_MAX, VY_MAX, WZ_MAX = 0.4, 0.2, 1.5
 HEAD_YAW_MAX = 1.4
@@ -25,6 +29,53 @@ QPOS_ABS_MAX = 100.0
 
 class Rejected(ValueError):
     pass
+
+
+# ----------------------------------------------------------------- 共有トークン
+def new_token() -> str:
+    import secrets
+    return secrets.token_hex(TOKEN_BYTES)
+
+
+def token_path(root: str) -> str:
+    import os
+    return os.path.join(root, *TOKEN_FILE.split("/"))
+
+
+def write_token(root: str, token: str) -> str:
+    """トークンファイルを所有者のみ読める権限で作る（POSIX は 0600。Windows は同一ユーザー前提）。"""
+    import os
+    path = token_path(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as f:
+        f.write(token)
+    return path
+
+
+def read_token(root: str) -> Optional[str]:
+    import os
+    path = token_path(root)
+    try:
+        with open(path, encoding="ascii") as f:
+            t = f.read().strip()
+    except OSError:
+        return None
+    return t if _looks_like_token(t) else None
+
+
+def _looks_like_token(t: Any) -> bool:
+    return isinstance(t, str) and len(t) == TOKEN_BYTES * 2 and all(c in "0123456789abcdef" for c in t)
+
+
+def check_token(msg: dict, expected: Optional[str]) -> None:
+    """expected が None（トークン無効）なら何もしない。そうでなければ定数時間比較で一致を要求する。"""
+    if expected is None:
+        return
+    import hmac
+    t = msg.get("token")
+    if not _looks_like_token(t) or not hmac.compare_digest(t, expected):
+        raise Rejected("bad or missing token")
 
 
 def _reject_constant(name: str):

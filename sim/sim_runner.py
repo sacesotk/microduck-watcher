@@ -62,6 +62,7 @@ import mujoco  # noqa: E402
 import mujoco.viewer  # noqa: E402
 import demo_scene  # noqa: E402  (椅子に座る人を実行時にシーンへ追加)
 import udp_schema  # noqa: E402  (受信メッセージの厳密な検証)
+import pins_check  # noqa: E402  (公式リポジトリのコミットと ONNX のダイジェストを照合)
 import infer_policy  # noqa: E402  (公式スクリプトをモジュールとして読み込む)
 
 ADD_PERSON = True   # --no-person で無効化
@@ -109,11 +110,14 @@ class UdpCommandInput:
 
     policy = None  # PatchedPolicyInference が自身を登録する
 
+    token = None   # 共有トークン（None なら検証しない: --no-token）
+
     def __init__(self):
         self.sock = None
         self.deadline = None       # 速度指令の期限
         self.last_msg_t = 0.0
         self.n_msgs = 0
+        self.n_rejected = 0
         self._init_qpos = None     # reset 用: main() が初期姿勢を作った直後の状態
         self._init_ctrl = None
         self._tick = 0
@@ -130,6 +134,8 @@ class UdpCommandInput:
         try:
             msg = {"t": time.time(), "qpos": [round(float(v), 5) for v in p.data.qpos],
                    "policy": p.current_policy, "sit": bool(p.sit_mode)}
+            if self.token:
+                msg["token"] = self.token
             self._state_sock.sendto(json.dumps(msg).encode("utf-8"), (UDP_HOST, STATE_PORT))
         except OSError:
             pass
@@ -164,10 +170,11 @@ class UdpCommandInput:
 
     def __enter__(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((UDP_HOST, UDP_PORT))
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, udp_schema.RCVBUF_BYTES)
+        self.sock.bind((UDP_HOST, UDP_PORT))      # SO_REUSEADDR は付けない（同じポートの二重 bind を許さない）
         self.sock.setblocking(False)
-        print(f"[sim_runner] UDP listening on {UDP_HOST}:{UDP_PORT}  (Ctrl+C or close viewer to quit)")
+        print(f"[sim_runner] UDP listening on {UDP_HOST}:{UDP_PORT}  token={'on' if self.token else 'OFF'}  "
+              f"(Ctrl+C or close viewer to quit)", flush=True)
         return self
 
     def __exit__(self, *exc):
@@ -176,22 +183,29 @@ class UdpCommandInput:
 
     # -- 内部 ----------------------------------------------------------------
     def _recv_latest(self):
-        """保留中のデータグラムをすべて読み、検証を通った最後の 1 件（正規化済み）を返す。
-        送信元がループバックでない / サイズ超過 / 不正 JSON / NaN / 型違い / 未知 policy は捨てる。"""
+        """保留中のデータグラムを 1 ティックあたり MAX_PER_TICK 件まで読み、検証を通った最後の 1 件を返す。
+        送信元がループバックでない / トークン不一致 / サイズ超過 / 不正 JSON / NaN / 型違い / 未知 policy は捨て、
+        送信元 (IP:port) を添えて記録する。"""
         latest = None
-        while True:
+        for _ in range(udp_schema.MAX_PER_TICK):
             try:
                 data, sender = self.sock.recvfrom(udp_schema.MAX_DATAGRAM + 1)
             except (BlockingIOError, InterruptedError):
                 break
-            except OSError:
-                break
+            except OSError as e:           # Windows: 上限超のデータグラムは WSAEMSGSIZE。読み続ける
+                self.n_rejected += 1
+                print(f"[sim_runner] rejected datagram (socket error {e.errno})", flush=True)
+                continue
             try:
-                latest = udp_schema.validate_command(udp_schema.loads_strict(data, sender))
+                msg = udp_schema.loads_strict(data, sender)
+                udp_schema.check_token(msg, self.token)
+                latest = udp_schema.validate_command(msg)
             except udp_schema.Rejected as e:
-                print(f"[sim_runner] rejected datagram from {sender}: {e}", flush=True)
+                self.n_rejected += 1
+                print(f"[sim_runner] rejected datagram from {sender[0]}:{sender[1]}: {e}", flush=True)
             except Exception as e:
-                print(f"[sim_runner] rejected datagram: {e!r}", flush=True)
+                self.n_rejected += 1
+                print(f"[sim_runner] rejected datagram from {sender[0]}:{sender[1]}: {e!r}", flush=True)
         return latest
 
     @staticmethod
@@ -199,7 +213,8 @@ class UdpCommandInput:
         return max(-lim, min(lim, float(v)))
 
     def _apply(self, msg: dict, now: float):
-        """msg は udp_schema.validate_command で正規化済み（policy/twist/head_yaw/duration/sit/scene）。"""
+        """msg は udp_schema.validate_command で正規化済み。
+        ここでは「状態を変える前に必要な値をすべて確定」してから、まとめて反映する（途中失敗で中途半端に変えない）。"""
         p = self.policy
         if p is None:
             return
@@ -207,41 +222,53 @@ class UdpCommandInput:
         if kind == "reset":
             self.reset()
             return
-        if kind == "scene":  # 舞台装置の見た目
+        if kind == "scene":  # 舞台装置の見た目（ロボットの制御状態は変えない）
             sc = msg["scene"]
+            ops = []
             if "person" in sc:
-                demo_scene.set_person_visible(p.model, sc["person"])
+                ops.append(lambda: demo_scene.set_person_visible(p.model, sc["person"]))
             if "phone" in sc:
-                demo_scene.set_phone_visible(p.model, sc["phone"])
+                ops.append(lambda: demo_scene.set_phone_visible(p.model, sc["phone"]))
             if "eyes_closed" in sc:
-                demo_scene.set_eyes_closed(p.model, sc["eyes_closed"])
+                ops.append(lambda: demo_scene.set_eyes_closed(p.model, sc["eyes_closed"]))
             if "mouth_open" in sc:
-                demo_scene.set_mouth_open(p.model, sc["mouth_open"])
+                ops.append(lambda: demo_scene.set_mouth_open(p.model, sc["mouth_open"]))
             if "side" in sc:
-                demo_scene.set_person_side(p.model, sc["side"])
+                ops.append(lambda: demo_scene.set_person_side(p.model, sc["side"]))
+            for op in ops:
+                op()
             return
-        if msg["head_yaw"] is not None:
-            p.head_offset[2] = self._clip(msg["head_yaw"], HEAD_YAW_MAX)
-            p._update_command()
 
+        # ---- 1) 確定（まだ何も変えない）
+        head_yaw = None if msg["head_yaw"] is None else self._clip(msg["head_yaw"], HEAD_YAW_MAX)
         if kind == "sitstand":
             if p.sit_session is None:
-                print("[sim_runner] sitstand policy not loaded")
+                print("[sim_runner] sitstand policy not loaded; command ignored", flush=True)
                 return
-            if msg["sit"] != p.sit_mode:
+            want_sit = bool(msg["sit"])
+            vx = vy = wz = 0.0
+            deadline = None
+        else:  # walking / standing / stop
+            want_sit = False
+            vx, vy, wz = (msg["twist"] if kind == "walking" else [0.0, 0.0, 0.0])
+            vx, vy, wz = self._clip(vx, VX_MAX), self._clip(vy, VY_MAX), self._clip(wz, WZ_MAX)
+            moving = (abs(vx) + abs(vy) + abs(wz)) > 1e-6
+            deadline = (now + float(msg["duration"])) if moving else None
+
+        # ---- 2) 反映
+        if head_yaw is not None:
+            p.head_offset[2] = head_yaw
+            p._update_command()
+        if kind == "sitstand":
+            if want_sit != p.sit_mode:
                 p.vel_cmd[:] = 0.0
                 p.toggle_sit()
             self.deadline = None
             return
-
-        # walking / standing / stop → まず座っていれば立たせる
-        if p.sit_mode:
+        if p.sit_mode:          # 座っていれば先に立つ
             p.toggle_sit()
-        vx, vy, wz = (msg["twist"] if kind == "walking" else [0.0, 0.0, 0.0])
-        vx, vy, wz = self._clip(vx, VX_MAX), self._clip(vy, VY_MAX), self._clip(wz, WZ_MAX)
         p.set_vel_cmd(vx, vy, wz)
-        moving = (abs(vx) + abs(vy) + abs(wz)) > 1e-6
-        self.deadline = now + msg["duration"] if moving else None
+        self.deadline = deadline
 
     # -- TerminalInput 互換 API ------------------------------------------------
     def get_keys(self):
@@ -276,6 +303,29 @@ def main():
     if "--no-person" in argv:
         argv.remove("--no-person")
         ADD_PERSON = False
+    allow_unpinned = "--allow-unpinned" in argv
+    if allow_unpinned:
+        argv.remove("--allow-unpinned")
+    no_token = "--no-token" in argv
+    if no_token:
+        argv.remove("--no-token")
+
+    # 読み込む前に、公式リポジトリのコミットと ONNX のダイジェストを pins.json と照合する
+    try:
+        checked = pins_check.verify_sim()
+        print("[sim_runner] pins verified:", ", ".join(checked), flush=True)
+    except pins_check.PinMismatch as e:
+        if allow_unpinned:
+            print(f"[sim_runner] WARNING pin mismatch (continuing because --allow-unpinned): {e}", flush=True)
+        else:
+            print(f"[sim_runner] REFUSING TO START: {e}\n  (scripts\\setup_sim.bat で取り直すか、確認のうえ --allow-unpinned)", flush=True)
+            sys.exit(2)
+
+    # 指令の送信元を限定する共有トークン（watcher / demo / send_cmd が logs/.udp_token を読む）
+    if not no_token:
+        UdpCommandInput.token = udp_schema.new_token()
+        path = udp_schema.write_token(ROOT, UdpCommandInput.token)
+        print(f"[sim_runner] session token written to {os.path.relpath(path, ROOT)}", flush=True)
     _install_scene_patches()
     # 既定ポリシー（指定が無ければ補う）
     defaults = {

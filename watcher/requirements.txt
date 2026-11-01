@@ -1,10 +1,14 @@
-# watcher 側（Windows ネイティブ, Python 3.12）
+# watcher 側の直接依存（人が読む版）。実際のインストールはハッシュ固定の watcher/requirements.lock を
+# --require-hashes で行う（scripts/setup_watcher.ps1）。更新手順:
+#   uv pip compile --python-version 3.12 --python-platform windows --generate-hashes watcher/requirements.txt -o watcher/requirements.lock
 opencv-python>=4.10
 ultralytics>=8.3
 mediapipe>=0.10.21,<1      # 1.x は API が変わるため 0.10 系に固定
+mujoco==3.10.0             # ダック視点の描画（demo）
 pyyaml
 requests
 pyttsx3                    # VOICEVOX が使えない時の予備
-sounddevice                # wav 再生（simpleaudio は Windows/py3.12 用 wheel が無いため不採用）
+sounddevice                # wav 再生
 soundfile
 numpy
+reportlab                  # 説明資料の生成にのみ使用

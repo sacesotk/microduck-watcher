@@ -24,13 +24,16 @@ class StateReceiver(threading.Thread):
     ループバック以外の送信元・サイズ超過・不正な JSON・NaN/Infinity・長さ違い・非有限値は捨て、
     検証を通った最新の qpos だけを latest に保持する（sim/udp_schema.py）。"""
 
-    def __init__(self, expected_len: int, host="127.0.0.1", port=5006):
+    def __init__(self, expected_len: int, host="127.0.0.1", port=5006, token_root: str = ROOT):
         super().__init__(daemon=True)
-        from udp_schema import MAX_DATAGRAM, Rejected, loads_strict, validate_state
-        self._loads, self._validate, self._Rejected, self._max = loads_strict, validate_state, Rejected, MAX_DATAGRAM
+        import udp_schema as U
+        self._U = U
+        self._loads, self._validate, self._Rejected, self._max = U.loads_strict, U.validate_state, U.Rejected, U.MAX_DATAGRAM
         self.expected_len = int(expected_len)
+        self.token_root = token_root
+        self.token = U.read_token(token_root)      # sim が書いたトークン。無ければ受け取った時点で再読込
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, U.RCVBUF_BYTES)
         self.sock.bind((host, port))
         self.sock.settimeout(0.5)
         self.latest = None           # {"qpos": [...]} 検証済みのみ
@@ -61,6 +64,11 @@ class StateReceiver(threading.Thread):
                 continue
             try:
                 msg = self._loads(data, sender)
+                if self.token is None:
+                    self.token = self._U.read_token(self.token_root)
+                if self.token is None:
+                    raise self._Rejected("no session token available yet (is the sim running?)")
+                self._U.check_token(msg, self.token)
                 qpos = self._validate(msg, self.expected_len)
             except self._Rejected:
                 self.n_rejected += 1

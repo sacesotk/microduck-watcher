@@ -1,22 +1,20 @@
-﻿# sim 側の環境構築（Windows ネイティブ, Python 3.12, uv）
-# 公式 microduck_rl は「変更しない」。uv sync（CUDA 約 2 GB）は使わず、推論に必要な最小構成だけ入れる。
-$ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent $PSScriptRoot
+﻿# sim side setup (Windows native, Python 3.12, uv). Everything external is pinned in pins.json:
+#  - microduck_rl: exact commit (shallow fetch of that commit, HEAD verified)
+#  - policies: Hugging Face revision + SHA-256 per file
+#  - python packages: hash-pinned lock (sim/requirements.lock) installed with --require-hashes
+#  - bam: git dependency pinned by commit SHA (VCS deps cannot be hash-pinned)
+. "$PSScriptRoot\pins.ps1"
 Set-Location $Root
 
-if (-not (Test-Path "$Root\microduck_rl\.git")) {
-    git clone --depth 1 --branch develop https://github.com/pollen-robotics/microduck_rl microduck_rl
-}
+Get-PinnedGitCheckout $Pins.microduck_rl.url $Pins.microduck_rl.commit (Join-Path $Root "microduck_rl")
 
 uv venv --python 3.12 sim\.venv
-uv pip install --python sim\.venv -r sim\requirements.txt
+uv pip install --python sim\.venv --require-hashes -r sim\requirements.lock
+uv pip install --python sim\.venv --no-deps "better-actuator-models @ git+$($Pins.bam.url)@$($Pins.bam.commit)"
 
-# 学習済みポリシー（Hugging Face pollen-robotics/microduck-policies, Apache-2.0）
-New-Item -ItemType Directory -Force policies | Out-Null
-foreach ($f in @("alpha_walking.onnx", "alpha_stand.onnx", "alpha_sitstand.onnx", "velstand.onnx", "manifest.json")) {
-    if (-not (Test-Path "policies\$f")) {
-        curl.exe -sL -o "policies\$f" "https://huggingface.co/pollen-robotics/microduck-policies/resolve/main/$f"
-    }
+$rev = $Pins.policies.revision
+foreach ($f in $Pins.policies.files.PSObject.Properties) {
+    Get-VerifiedFile "https://huggingface.co/$($Pins.policies.repo)/resolve/$rev/$($f.Name)" (Join-Path $Root "policies\$($f.Name)") $f.Value
 }
 
 sim\.venv\Scripts\python.exe sim\check_env.py

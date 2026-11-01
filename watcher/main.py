@@ -20,6 +20,9 @@ import yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+sys.path.insert(0, os.path.join(ROOT, "sim"))
+import pins_check  # noqa: E402
+
 from behavior import Actions, Behavior, Observation  # noqa: E402
 from fatigue import Fatigue  # noqa: E402
 from perception import Perception, phone_below_face  # noqa: E402
@@ -131,6 +134,11 @@ def main():
         print(f"カメラ {idx} を開けません。config.yaml の camera.index を変えてください")
         sys.exit(1)
 
+    try:  # 読み込む前にモデルファイルのダイジェストを pins.json と照合
+        print("[main] model pins verified:", ", ".join(pins_check.verify_watcher_models()))
+    except pins_check.PinMismatch as e:
+        print(f"[main] REFUSING TO START: {e}  (scripts\\setup_watcher.bat で取り直してください)")
+        sys.exit(2)
     perception = Perception(cfg)
     fatigue = Fatigue(cfg)
     bridge = SimBridge(cfg["robot"]["udp_host"], int(cfg["robot"]["udp_port"]), verbose=True)

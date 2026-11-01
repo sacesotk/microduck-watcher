@@ -135,7 +135,29 @@ sim 側は `sim/demo_scene.py` で **椅子に座る人**（見た目だけ、�
 受信側（sim の指令 :5005、demo の姿勢 :5006）は `sim/udp_schema.py` で厳密に検証する:
 ループバック以外の送信元・8 KiB 超・UTF-8/JSON として不正・`NaN`/`Infinity`・辞書でないトップレベル・未知の policy・
 型違い（文字列や bool の数値）・twist の長さ違い・qpos の長さ違いや非有限値はすべて捨て、数値は範囲内にクリップする。
+- **送信元の認証**: sim は起動時に 32 バイトの乱数トークンを `logs/.udp_token`（所有者のみ読める）に書き、
+  指令には `"token"` の一致を要求する（定数時間比較）。watcher / demo / send_cmd はこのファイルを読んで付与し、
+  sim の再起動（トークン更新）にも追従する。sim が配信する姿勢にも同じトークンを付け、demo 側で検証する。
+  拒否は送信元 IP:port を添えて記録。`--no-token` で無効化できる（手動試験用）。
+- **受信量の上限**: 1 ティックに読むデータグラムは 32 件まで、ソケット受信バッファは 64 KiB。
+- **検証後に反映**: 指令は全項目を検証・正規化してから、まとめて制御状態に反映する。
 テスト: `watcher\tests\test_udp_schema.py`。
+
+## 外部資産の固定（pins.json）
+
+取得するものはすべて `pins.json` の固定リビジョン・ダイジェストに縛る。セットアップは一致を確認してから配置し、
+起動時にも再照合する（不一致なら起動しない。確認のうえ `--allow-unpinned` で警告に落とせる）。
+
+| 対象 | 固定方法 | 検証タイミング |
+|---|---|---|
+| microduck_rl（公式コード） | コミット SHA を shallow fetch し HEAD を照合。作業ツリーの改変も検出 | setup / sim 起動時 |
+| 学習済み ONNX（Hugging Face） | リポジトリのリビジョン SHA を URL に埋め、各ファイルの SHA-256 を照合 | setup / sim 起動時（読み込む前） |
+| YOLO11n / Face Landmarker | 固定 URL + SHA-256 | setup / watcher 起動時（読み込む前） |
+| VOICEVOX Engine | 版・URL・SHA-256 | setup（展開する前） |
+| Python パッケージ | `uv pip compile --generate-hashes` のロック（`*/requirements.lock`）を `--require-hashes` で導入 | setup |
+| bam（git 依存） | コミット SHA 固定（VCS 依存はハッシュ固定不可） | setup |
+
+更新するときは新しい版を検証してから `pins.json` を書き換える。`sim\pins_check.py` を直接実行すると現状を照合できる。
 `sitstand` は `sit` フラグで座る/立つ（同じポリシーが約 2 秒で遷移）。walking/standing/stop を送ると座っていれば先に立つ。
 
 ## 歩行ポリシーの制約（2026-11-01 計測）
